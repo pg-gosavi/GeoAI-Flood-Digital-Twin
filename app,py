@@ -1,0 +1,107 @@
+import gradio as gr
+import osmnx as ox
+import matplotlib.pyplot as plt
+import warnings
+
+warnings.filterwarnings("ignore")
+
+# --- 1. DATA LOADING ---
+print("Loading Mumbai Digital Twin Graph Data...")
+base_path = "mumbai_bkc_graph_baseline.graphml"
+
+# Dictionary to hold our pre-calculated graphs
+graphs = {
+    0: ox.load_graphml(base_path)
+}
+
+# Try to load the dynamic graphs 
+try:
+    graphs[2] = ox.load_graphml("mumbai_flood_2m.graphml")
+    graphs[4] = ox.load_graphml("mumbai_flood_4m.graphml")
+    graphs[6] = ox.load_graphml("mumbai_flood_6m.graphml")
+    graphs[8] = ox.load_graphml("mumbai_flood_8m.graphml")
+    graphs[10] = ox.load_graphml("mumbai_flood_10m.graphml")
+except Exception as e:
+    print("Warning: Dynamic files not found. Please upload them.")
+
+G_base = graphs[0]
+total_edges = len(G_base.edges)
+baseline_edges = set(G_base.edges(keys=True))
+
+# --- 2. CORE LOGIC FUNCTION ---
+def update_dashboard(water_level):
+    BG_COLOR = '#111827' 
+    SAFE_COLOR = '#FFFFFF' 
+    FLOOD_COLOR = '#EF4444' 
+    
+    # Snap the slider value to our pre-calculated tiers
+    closest_level = min(graphs.keys(), key=lambda k: abs(k - water_level))
+    G_current = graphs.get(closest_level, G_base)
+    
+    surviving_edges = len(G_current.edges)
+    blocked_edges = total_edges - surviving_edges
+    
+    current_edges = set(G_current.edges(keys=True))
+    lost_edges_set = baseline_edges - current_edges
+    
+    fig, ax = plt.subplots(figsize=(8, 5.5), facecolor=BG_COLOR)
+    fig.patch.set_facecolor(BG_COLOR)
+    ax.set_facecolor(BG_COLOR)
+    
+    if closest_level == 0:
+        status = "Mumbai Infrastructure operating at 100% capacity."
+        ec = [SAFE_COLOR for u, v, k in G_base.edges(keys=True)]
+        lw = [0.6 for u, v, k in G_base.edges(keys=True)]
+    else:
+        status = f"ALERT: Coastal flooding detected. Sea level rise: {closest_level}m."
+        ec = [FLOOD_COLOR if (u, v, k) in lost_edges_set else SAFE_COLOR for u, v, k in G_base.edges(keys=True)]
+        lw = [2.5 if (u, v, k) in lost_edges_set else 0.4 for u, v, k in G_base.edges(keys=True)]
+
+    ox.plot_graph(
+        G_base, ax=ax, node_size=0, edge_color=ec, edge_linewidth=lw, 
+        bgcolor=BG_COLOR, show=False, close=False
+    )
+    
+    ax.axis('off')
+    plt.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    plt.tight_layout(pad=0) 
+    plt.close(fig) 
+    
+    return fig, f"{surviving_edges:,}", f"{blocked_edges:,}", status
+
+# --- 3. GRADIO UI LAYOUT ---
+with gr.Blocks(theme=gr.themes.Monochrome()) as demo:
+    gr.HTML("<h2 style='text-align: center; margin-bottom: 2px;'>🌊 GeoAI Flood Digital Twin</h2>")
+    gr.HTML("<p style='text-align: center; font-size: 0.9em; margin-top: 0px; margin-bottom: 10px;'><b>Target Area:</b> South Mumbai | <b>Edge AI Model:</b> U-Net</p>")
+    
+    with gr.Row():
+        with gr.Column(scale=1):
+            gr.Markdown("### Simulation Engine")
+            
+            # REPLACED RADIO BUTTON WITH SLIDER
+            water_slider = gr.Slider(
+                minimum=0, 
+                maximum=10, 
+                step=2, 
+                value=0, 
+                label="Simulated Water Level (Meters)"
+            )
+            
+            gr.Markdown("---")
+            gr.Markdown("### Live Network Metrics")
+            roads_navigable = gr.Textbox(label="Total Navigable Roads", value=f"{total_edges:,}")
+            roads_blocked = gr.Textbox(label="Flooded / Blocked Roads", value="0")
+            status_message = gr.Textbox(label="System Status", value="Mumbai Infrastructure operating at 100% capacity.")
+
+        with gr.Column(scale=3):
+            initial_fig, _, _, _ = update_dashboard(0)
+            map_plot = gr.Plot(value=initial_fig)
+
+    # Trigger update when slider moves
+    water_slider.change(
+        fn=update_dashboard,
+        inputs=water_slider,
+        outputs=[map_plot, roads_navigable, roads_blocked, status_message]
+    )
+
+demo.launch()
